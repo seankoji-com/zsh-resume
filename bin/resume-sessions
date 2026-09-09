@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""Collect resumable AI-CLI sessions and print them as TSV, newest first.
+
+Columns: tool, session id, last-updated epoch seconds, cwd, title.
+
+Readers exist for claude, agy, codex, opencode, opencode2, grok and kiro-cli.
+Each reads only its own on-disk store and never writes. A store that is
+missing yields nothing; one that cannot be read prints a warning to stderr and
+is skipped so the other tools still list. Titles are flattened to one line
+with control characters removed, so a row is always exactly one line.
+
+Repo scoping is exact: a session belongs when its cwd (realpath'd) is the
+root, under the root, or equal to / under any `git worktree list` path.
+Readers get the scope as a predicate and skip a store file as soon as its cwd
+is known, so no per-tool file cap is applied — `--limit` caps output rows
+only, after sorting.
+
+Usage:
+  resume-sessions --root DIR [--tools a,b] [--limit N]
+  resume-sessions --all      [--tools a,b] [--limit N]
+"""
+import argparse
+import glob
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import urllib.parse
+from datetime import datetime, timezone
+
+TOOLS = ["claude", "agy", "codex", "opencode", "opencode2", "grok", "kiro-cli"]
+WINDOW = 256 * 1024       # bytes read from the head and the tail of a large claude transcript
+CODEX_SCAN = 64 * 1024    # bytes scanned forward in a codex rollout for a first prompt
+TITLE_MAX = 200
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def warn(msg):
+    print(f"resume-sessions: {msg}", file=sys.stderr)
+
+
+def home(*parts):
+    return os.path.join(os.environ.get("RESUME_HOME") or os.path.expanduser("~"), *parts)
+
+
+def parse_ts(value):
+    """Epoch seconds from an ISO-8601 string, epoch seconds or epoch millis."""
+    if value in (None, ""):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return value / 1000.0 if value > 1e11 else float(value)
+    s = str(value).strip().replace("Z", "+00:00")
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def clean(text, limit=TITLE_MAX):
+    """One line of printable text: no escapes, no control characters, no tabs."""
+    text = ANSI.sub("", str(text or ""))
+    text = CONTROL.sub(" ", text)
+    return " ".join(text.split())[:limit]
+
+
+def prompt_text(content):
+    """Plain text from a Claude/Codex message content (string or block list)."""
+    if isinstance(content, list):
+        content = " ".join(
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") in ("text", "input_text")
+        )
+    return clean(content)
+
+
+def loads(line):
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
+def ro_connect(path):
+    """Open a SQLite store without ever writing to it.
+
+    mode=ro sees rows still in the write-ahead log, so it comes first;
+    immutable=1 is the fallback for a directory we cannot create a -shm in.
+    """
+    uri = "file:" + urllib.parse.quote(path)
+    try:
+        db = sqlite3.connect(uri + "?mode=ro", uri=True)
+        db.execute("select 1 from sqlite_master limit 1").fetchall()
+        return db
+    except sqlite3.Error:
+        return sqlite3.connect(uri + "?immutable=1", uri=True)
+
+
+# --- readers -----------------------------------------------------------------
+# Each takes keep(cwd) -> bool and yields (tool, id, updated_epoch, cwd, title).
+
+def _windows(path):
+    """Head and tail text of a file: the whole file when small, else two
+    WINDOW-sized chunks with the partial line at the tail's start dropped."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as fh:
+        if size <= 2 * WINDOW:
+            data = fh.read().decode("utf-8", "replace")
+            return data.splitlines(), []
+        head = fh.read(WINDOW).decode("utf-8", "replace").splitlines()[:-1]
+        fh.seek(size - WINDOW)
+        tail = fh.read().decode("utf-8", "replace").splitlines()[1:]
+        return head, tail
+
+
+def read_claude(keep):
+    # One level only: <slug>/<session>.jsonl. Deeper files under <slug>/<id>/
+    # subagents/ are agent transcripts, not resumable sessions.
+    for path in glob.glob(home(".claude", "projects", "*", "*.jsonl")):
+        sid = os.path.basename(path)[:-6]
+        cwd = title = first = last_prompt = ""
+        try:
+            head, tail = _windows(path)
+        except OSError as e:
+            warn(f"claude: cannot read {path}: {e}")
+            continue
+        skip = False
+        for line in head:
+            if 'custom-title' in line:
+                d = loads(line)
+                if d:
+                    title = d.get("customTitle") or title
+            elif 'last-prompt' in line:
+                d = loads(line)
+                if d:
+                    last_prompt = d.get("lastPrompt") or last_prompt
+            elif '"user"' in line and (not cwd or not first):
+                d = loads(line)
+                if not d or d.get("type") != "user":
+                    continue
+                if not cwd:
+                    cwd = d.get("cwd", "")
+                    if cwd and not keep(cwd):
+                        skip = True
+                        break
+                if not first:
+                    text = prompt_text(d.get("message", {}).get("content", ""))
+                    if text and not text.startswith("<"):
+                        first = text
+        if skip or not cwd:
+            continue
+        for line in tail:
+            if 'custom-title' in line:
+                d = loads(line)
+                if d:
+                    title = d.get("customTitle") or title
+            elif 'last-prompt' in line:
+                d = loads(line)
+                if d:
+                    last_prompt = d.get("lastPrompt") or last_prompt
+        yield ("claude", sid, os.path.getmtime(path), cwd, clean(title) or first or clean(last_prompt))
+
+
+def read_agy(keep):
+    path = home(".gemini", "antigravity-cli", "history.jsonl")
+    if not os.path.isfile(path):
+        return
+    convs = {}
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                d = loads(line)
+                if not d:
+                    continue
+                cid = d.get("conversationId")
+                if not cid:
+                    continue
+                ts = parse_ts(d.get("timestamp"))
+                c = convs.setdefault(cid, {"cwd": "", "title": "", "ts": 0.0})
+                c["ts"] = max(c["ts"], ts)
+                c["cwd"] = c["cwd"] or d.get("workspace", "")
+                c["title"] = c["title"] or clean(d.get("display"))
+    except OSError as e:
+        warn(f"agy: cannot read {path}: {e}")
+        return
+    for cid, c in convs.items():
+        if c["cwd"] and keep(c["cwd"]):
+            yield ("agy", cid, c["ts"], c["cwd"], c["title"])
+
+
+def read_codex(keep):
+    names = {}
+    index = home(".codex", "session_index.jsonl")
+    if os.path.isfile(index):
+        try:
+            with open(index, errors="replace") as fh:
+                for line in fh:
+                    d = loads(line)
+                    if d and d.get("id") and d.get("thread_name"):
+                        names[d["id"]] = clean(d["thread_name"])
+        except OSError as e:
+            warn(f"codex: cannot read {index}: {e}")
+    for path in glob.glob(home(".codex", "sessions", "*", "*", "*", "rollout-*.jsonl")):
+        try:
+            with open(path, "rb") as fh:
+                meta = loads(fh.readline().decode("utf-8", "replace"))
+                if not meta or meta.get("type") != "session_meta":
+                    continue
+                p = meta.get("payload", {})
+                if p.get("thread_source") in ("subagent", "guardian_review"):
+                    continue
+                sid, cwd = p.get("id") or p.get("session_id", ""), p.get("cwd", "")
+                if not sid or not cwd or not keep(cwd):
+                    continue
+                first = ""
+                if sid not in names:
+                    for line in fh.read(CODEX_SCAN).decode("utf-8", "replace").splitlines():
+                        d = loads(line)
+                        if not d:
+                            continue
+                        p = d.get("payload", {})
+                        if d.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
+                            text = prompt_text(p.get("content"))
+                        elif d.get("type") == "event_msg" and p.get("type") == "user_message":
+                            text = clean(p.get("message"))
+                        else:
+                            continue
+                        if text and not text.startswith("<"):
+                            first = text
+                            break
+        except OSError as e:
+            warn(f"codex: cannot read {path}: {e}")
+            continue
+        yield ("codex", sid, os.path.getmtime(path), cwd, names.get(sid) or first)
+
+
+def _read_opencode_db(tool, path, keep):
+    if not os.path.isfile(path):
+        return
+    try:
+        db = ro_connect(path)
+        tables = {r[0] for r in db.execute("select name from sqlite_master where type='table'")}
+        seen = set()
+        for table in ("session_v2", "session"):
+            if table not in tables:
+                continue
+            rows = db.execute(
+                f"select id, directory, time_updated, title from {table} where parent_id is null"
+            ).fetchall()
+            for sid, directory, updated, title in rows:
+                if sid in seen or not directory or not keep(directory):
+                    continue
+                seen.add(sid)
+                yield (tool, sid, parse_ts(updated), directory, clean(title))
+    except sqlite3.Error as e:
+        warn(f"{tool}: cannot read {path}: {e}")
+
+
+def read_opencode(keep):
+    data = os.environ.get("XDG_DATA_HOME") or home(".local", "share")
+    yield from _read_opencode_db("opencode", os.path.join(data, "opencode", "opencode.db"), keep)
+
+
+def read_opencode2(keep):
+    root = os.environ.get("OPENCODE2_ROOT") or home(".local", "share", "opencode2")
+    yield from _read_opencode_db("opencode2", os.path.join(root, "share", "opencode", "opencode.db"), keep)
+
+
+def read_grok(keep):
+    for path in glob.glob(home(".grok", "sessions", "*", "*", "summary.json")):
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError) as e:
+            warn(f"grok: cannot read {path}: {e}")
+            continue
+        info = d.get("info", {})
+        sid, cwd = info.get("id", ""), info.get("cwd", "")
+        # /.grok/worktrees/ holds subagent scratch checkouts, not user sessions.
+        if not sid or not cwd or "/.grok/worktrees/" in cwd or not keep(cwd):
+            continue
+        ts = max(parse_ts(d.get("updated_at")), parse_ts(d.get("last_active_at")))
+        yield ("grok", sid, ts or os.path.getmtime(path), cwd, clean(d.get("session_summary")))
+
+
+def read_kiro(keep):
+    # Current layout (kiro-cli 2.x): <dirkey>/sess_<uuid>/session.json.
+    for path in glob.glob(home(".kiro", "sessions", "*", "sess_*", "session.json")):
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError) as e:
+            warn(f"kiro-cli: cannot read {path}: {e}")
+            continue
+        sid = d.get("id") or os.path.basename(os.path.dirname(path))
+        paths = d.get("workspacePaths") or d.get("rootPaths") or []
+        cwd = paths[0] if paths else ""
+        if not sid or not cwd or not keep(cwd):
+            continue
+        ts = parse_ts(d.get("lastModifiedAt")) or parse_ts(d.get("createdAt")) or os.path.getmtime(path)
+        yield ("kiro-cli", sid, ts, cwd, clean(d.get("title")))
+    # Older layout: <dirkey>/<uuid>.json with the metadata inline.
+    for path in glob.glob(home(".kiro", "sessions", "*", "*.json")):
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError) as e:
+            warn(f"kiro-cli: cannot read {path}: {e}")
+            continue
+        sid, cwd = d.get("session_id", ""), d.get("cwd", "")
+        if not sid or not cwd or not keep(cwd):
+            continue
+        yield ("kiro-cli", sid, parse_ts(d.get("updated_at")) or os.path.getmtime(path), cwd, clean(d.get("title")))
+
+
+READERS = {
+    "claude": read_claude,
+    "agy": read_agy,
+    "codex": read_codex,
+    "opencode": read_opencode,
+    "opencode2": read_opencode2,
+    "grok": read_grok,
+    "kiro-cli": read_kiro,
+}
+
+
+# --- repo scoping ------------------------------------------------------------
+
+def norm(path):
+    try:
+        return os.path.realpath(os.path.expanduser(path)).rstrip("/") or "/"
+    except OSError:
+        return path
+
+
+def repo_dirs(root):
+    """The root plus every registered worktree, realpath'd."""
+    dirs = {norm(root)}
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, check=False,
+        ).stdout
+        for line in out.splitlines():
+            if line.startswith("worktree "):
+                dirs.add(norm(line[9:]))
+    except OSError:
+        pass
+    return dirs
+
+
+def scope(dirs):
+    cache = {}
+
+    def keep(cwd):
+        hit = cache.get(cwd)
+        if hit is None:
+            c = norm(cwd)
+            hit = cache[cwd] = any(c == d or c.startswith(d + "/") for d in dirs)
+        return hit
+
+    return keep
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    where = ap.add_mutually_exclusive_group(required=True)
+    where.add_argument("--root", help="repo root; keep sessions under it or under any of its worktrees")
+    where.add_argument("--all", action="store_true", help="every session on this machine")
+    ap.add_argument("--tools", default=",".join(TOOLS), help="comma-separated subset of: " + " ".join(TOOLS))
+    ap.add_argument("--limit", type=int, default=0, help="print at most N rows (0 = all)")
+    args = ap.parse_args(argv)
+
+    tools = [t for t in args.tools.split(",") if t]
+    unknown = [t for t in tools if t not in READERS]
+    if unknown:
+        ap.error("unknown tool(s): " + ", ".join(unknown))
+
+    keep = (lambda cwd: True) if args.all else scope(repo_dirs(args.root))
+    rows = []
+    for tool in tools:
+        try:
+            rows.extend(READERS[tool](keep))
+        except Exception as e:  # one broken store must not hide the others
+            warn(f"{tool}: skipped ({e.__class__.__name__}: {e})")
+    rows.sort(key=lambda r: r[2], reverse=True)
+    if args.limit > 0:
+        rows = rows[: args.limit]
+    for tool, sid, ts, cwd, title in rows:
+        sys.stdout.write("\t".join((tool, sid, str(int(ts)), clean(cwd, 4096), title)) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
