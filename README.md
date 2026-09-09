@@ -17,7 +17,7 @@ started in. Your own shell never changes directory.
 
 ```
 $ resume
-resume · zooma
+resume · my-project
 > _
 ▶ codex     09 Sep 09:41  …/worktrees/6f9b/poc                Harden the end-to-end journey          29081b02
   claude    08 Sep 22:49  .claude/worktrees/imps-discussion   Test plan quality review               e3497216
@@ -100,8 +100,8 @@ that are not on `PATH` are skipped unless named with `-t`. Titles are
 flattened to one clean line, so pasted logs or escape codes in a first prompt
 cannot break the picker.
 
-Scoping is exact on real paths: `~/repos/zooma` never picks up
-`~/repos/zooma-price-history`, and a session recorded through a symlink still
+Scoping is exact on real paths: `~/repos/my-project` never picks up
+`~/repos/my-other-project`, and a session recorded through a symlink still
 matches. One limitation: a session from a worktree that lived *outside* the
 checkout and has since been pruned can no longer be tied to the repo, so it
 only shows under `-a`.
