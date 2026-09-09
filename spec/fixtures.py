@@ -47,7 +47,7 @@ jsonl(f"{home}/.gemini/antigravity-cli/history.jsonl", [
 jsonl(f"{home}/.codex/session_index.jsonl", [{"id": "x1x1x1x1-0000-0000-0000-00000000000b", "thread_name": "Codex named thread"}])
 jsonl(f"{home}/.codex/sessions/2026/09/09/rollout-2026-09-09T09-00-00-x1x1x1x1-0000-0000-0000-00000000000b.jsonl", [
     {"type": "session_meta", "payload": {"id": "x1x1x1x1-0000-0000-0000-00000000000b", "cwd": wt, "thread_source": "user"}},
-])
+], mtime=T - 110)
 jsonl(f"{home}/.codex/sessions/2026/09/09/rollout-2026-09-09T09-00-01-x2x2x2x2-0000-0000-0000-00000000000c.jsonl", [
     {"type": "session_meta", "payload": {"id": "x2x2x2x2-0000-0000-0000-00000000000c", "cwd": repo, "thread_source": "subagent"}},
     {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "codex subagent"}]}},

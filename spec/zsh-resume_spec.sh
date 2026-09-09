@@ -241,10 +241,12 @@ Describe 'resume (errors)'
     It 'explains when python3 is missing'
     run_it() {
       builtin cd "$REPO"
+      # Only git and one stub CLI: /bin is left out because on a merged-/usr
+      # Linux it is /usr/bin and would bring python3 back.
       mkdir "$TMPROOT/nopy"
       ln -s "$(command -v git)" "$TMPROOT/nopy/git"
       ln -s "$TMPROOT/bin/grok" "$TMPROOT/nopy/grok"
-      PATH="$TMPROOT/nopy:/bin" resume -l
+      PATH="$TMPROOT/nopy" resume -l
     }
     When call run_it
     The status should be failure

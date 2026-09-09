@@ -390,7 +390,7 @@ def main(argv=None):
             rows.extend(READERS[tool](keep))
         except Exception as e:  # one broken store must not hide the others
             warn(f"{tool}: skipped ({e.__class__.__name__}: {e})")
-    rows.sort(key=lambda r: r[2], reverse=True)
+    rows.sort(key=lambda r: (r[2], r[1]), reverse=True)
     if args.limit > 0:
         rows = rows[: args.limit]
     for tool, sid, ts, cwd, title in rows:
