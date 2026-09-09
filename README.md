@@ -1,5 +1,8 @@
 # zsh-resume
 
+<img width="1727" height="647" alt="image" src="https://github.com/user-attachments/assets/d615831a-9178-49fe-80dc-488d3f6671b1" />
+
+
 Pick any AI-CLI session for the current repository and resume it.
 
 `resume` gathers the sessions that [Claude Code](https://docs.claude.com/en/docs/claude-code),
@@ -16,10 +19,10 @@ started in. Your own shell never changes directory.
 $ resume
 resume · zooma
 > _
-▶ codex     09 Sep 09:41  …/worktrees/6f9b/zooma              Harden Julian's end-to-end journey     29081b02
+▶ codex     09 Sep 09:41  …/worktrees/6f9b/poc                Harden the end-to-end journey          29081b02
   claude    08 Sep 22:49  .claude/worktrees/imps-discussion   Test plan quality review               e3497216
-  grok      08 Sep 20:00  .                                   Paywall-free AU vehicle price plan     9153e8f6
-  opencode2 08 Sep 19:47  .worktrees/scraper                  Remove safety references               6be9gw
+  grok      08 Sep 20:00  .                                   Research AU price plan.                9153e8f6
+  opencode2 08 Sep 19:47  .worktrees/scraper                  Improve safety references              6be9gw
 ```
 
 Titles are the session name when the tool keeps one (Claude `/rename`, Codex
