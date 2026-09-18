@@ -259,4 +259,21 @@ Describe 'resume (errors)'
     The output should include 'Usage: resume'
     End
     End
+Describe 'picker cancellation'
+    It 'preserves cancellation status without launching a CLI or changing directory'
+    run_it() {
+      printf '#!/bin/sh\ncat >/dev/null\nexit 130\n' > "$TMPROOT/bin/gum"
+      builtin cd "$REPO"
+      resume
+      local rc=$?
+      print -r -- "$PWD"
+      return $rc
+    }
+    When call run_it
+    The status should equal 130
+    The output should equal "$REPO"
+    The stderr should equal ''
+    End
+    End
+
     End
