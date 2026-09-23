@@ -40,8 +40,9 @@ each tool's store looks like, so a store-format change must land there too.
 
 ## Do not spend attention here
 
-- `.github/workflows/*.yml` diffs from `chore(ci): sync caller templates
-  from seankoji-com/.github` PRs — authored in the hub repo, not here.
+- Unchanged `call-reusable-*.yml` template content can be checked against
+  the central source. Review local workflow changes, including caller
+  triggers, permissions, runner choices, and pinned revisions.
 - `README.md` / `LICENSE` — prose and license text, no logic.
 - Shell formatting with no lint config to violate — only flag it if it
   actually breaks under `zsh`.
