@@ -17,5 +17,25 @@ concurrency:
 # The pinned zero-input workflow uses GitHub-hosted Ubuntu, installs zsh, and
 # honors this repository's .shellspec settings. Review that contract on updates.
 jobs:
+  lint:
+    name: Lint zsh sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zsh
+        run: |
+          if ! command -v zsh >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zsh
+          fi
+      - name: Syntax check zsh sources
+        run: |
+          for file in $(find . -name '*.zsh' -o -name '*.plugin.zsh'); do
+            zsh -n "$file" || exit 1
+          done
+
   test:
     uses: seankoji-com/.github/.github/workflows/reusable-shellspec.yml@dd88aa86a37bd8e3f7f3c036af63d88f8d35bb49
