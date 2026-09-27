@@ -38,11 +38,14 @@ each tool's store looks like, so a store-format change must land there too.
 - The spec restricts `PATH` to stubs + python3 + system bins. A test that
   needs a real CLI or real gum on PATH is testing the wrong thing.
 
+- Review local workflow changes, including reusable caller triggers,
+  permissions, runner choices, and pinned revisions.
+
 ## Do not spend attention here
 
-- Unchanged `call-reusable-*.yml` template content can be checked against
-  the central source. Review local workflow changes, including caller
-  triggers, permissions, runner choices, and pinned revisions.
+- Unchanged reusable workflow template content can be checked against its
+  central source; review any local changes.
+
 - `README.md` / `LICENSE` — prose and license text, no logic.
 - Shell formatting with no lint config to violate — only flag it if it
   actually breaks under `zsh`.
