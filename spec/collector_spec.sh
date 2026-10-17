@@ -27,6 +27,12 @@ cleanup() {
 BeforeEach 'setup'
 AfterEach 'cleanup'
 
+    It 'keeps later sessions when an earlier file disappears before stat'
+    When run python3 "$SHELLSPEC_PROJECT_ROOT/spec/mtime_race_test.py"
+    The status should be success
+    The stderr should include 'OK'
+    End
+
 rows() { collect --root "$REPO" --tools "$1" | cut -f1,2,4,5; }
 
     It 'claude: id from the filename, cwd from the first user line, custom title wins, subagent transcripts ignored'
