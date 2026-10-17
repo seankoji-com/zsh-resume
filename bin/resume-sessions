@@ -120,6 +120,14 @@ def _windows(path):
         return head, tail
 
 
+def _mtime(tool, path):
+    try:
+        return os.path.getmtime(path)
+    except OSError as e:
+        warn(f"{tool}: cannot stat {path}: {e}")
+        return None
+
+
 def read_claude(keep):
     # One level only: <slug>/<session>.jsonl. Deeper files under <slug>/<id>/
     # subagents/ are agent transcripts, not resumable sessions.
@@ -165,7 +173,10 @@ def read_claude(keep):
                 d = loads(line)
                 if d:
                     last_prompt = d.get("lastPrompt") or last_prompt
-        yield ("claude", sid, os.path.getmtime(path), cwd, clean(title) or first or clean(last_prompt))
+        ts = _mtime("claude", path)
+        if ts is None:
+            continue
+        yield ("claude", sid, ts, cwd, clean(title) or first or clean(last_prompt))
 
 
 def read_agy(keep):
@@ -238,7 +249,10 @@ def read_codex(keep):
         except OSError as e:
             warn(f"codex: cannot read {path}: {e}")
             continue
-        yield ("codex", sid, os.path.getmtime(path), cwd, names.get(sid) or first)
+        ts = _mtime("codex", path)
+        if ts is None:
+            continue
+        yield ("codex", sid, ts, cwd, names.get(sid) or first)
 
 
 def _read_opencode_db(tool, path, keep):
@@ -287,7 +301,10 @@ def read_grok(keep):
         if not sid or not cwd or "/.grok/worktrees/" in cwd or not keep(cwd):
             continue
         ts = max(parse_ts(d.get("updated_at")), parse_ts(d.get("last_active_at")))
-        yield ("grok", sid, ts or os.path.getmtime(path), cwd, clean(d.get("session_summary")))
+        ts = ts or _mtime("grok", path)
+        if ts is None:
+            continue
+        yield ("grok", sid, ts, cwd, clean(d.get("session_summary")))
 
 
 def read_kiro(keep):
@@ -304,7 +321,9 @@ def read_kiro(keep):
         cwd = paths[0] if paths else ""
         if not sid or not cwd or not keep(cwd):
             continue
-        ts = parse_ts(d.get("lastModifiedAt")) or parse_ts(d.get("createdAt")) or os.path.getmtime(path)
+        ts = parse_ts(d.get("lastModifiedAt")) or parse_ts(d.get("createdAt")) or _mtime("kiro-cli", path)
+        if ts is None:
+            continue
         yield ("kiro-cli", sid, ts, cwd, clean(d.get("title")))
     # Older layout: <dirkey>/<uuid>.json with the metadata inline.
     for path in glob.glob(home(".kiro", "sessions", "*", "*.json")):
@@ -317,7 +336,10 @@ def read_kiro(keep):
         sid, cwd = d.get("session_id", ""), d.get("cwd", "")
         if not sid or not cwd or not keep(cwd):
             continue
-        yield ("kiro-cli", sid, parse_ts(d.get("updated_at")) or os.path.getmtime(path), cwd, clean(d.get("title")))
+        ts = parse_ts(d.get("updated_at")) or _mtime("kiro-cli", path)
+        if ts is None:
+            continue
+        yield ("kiro-cli", sid, ts, cwd, clean(d.get("title")))
 
 
 READERS = {
