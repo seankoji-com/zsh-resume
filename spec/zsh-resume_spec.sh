@@ -34,7 +34,13 @@ setup() {
   cat > "$TMPROOT/bin/gum" <<'STUB'
 #!/bin/sh
 case "$1" in
-  filter) grep -F -m1 -- "${RESUME_TEST_PICK:?}" ;;
+  filter)
+    if [ -n "${RESUME_TEST_PICK_ROW:-}" ]; then
+      sed -n "${RESUME_TEST_PICK_ROW}p"
+    else
+      grep -F -m1 -- "${RESUME_TEST_PICK:?}"
+    fi
+    ;;
   log) shift; while [ $# -gt 0 ]; do case "$1" in --level) printf '%s ' "$2" >&2; shift 2 ;; --time=*) shift ;; *) printf '%s\n' "$1" >&2; shift ;; esac; done ;;
 esac
 STUB
@@ -129,6 +135,65 @@ Describe 'resume -l'
     End
 
 Describe 'resume (launch)'
+    Describe 'sessions with identical display fields'
+      collision_sessions() {
+        python3 - "$HOME" "$REPO" <<'PY'
+import json, os, pathlib, shutil, sys
+home, repo = sys.argv[1:]
+store = pathlib.Path(home) / '.claude'
+shutil.rmtree(store)
+project = store / 'projects' / 'collision'
+project.mkdir(parents=True)
+for sid in ('22222222-2222-4222-8222-2222deadbeef',
+            '11111111-1111-4111-8111-1111deadbeef'):
+    path = project / (sid + '.jsonl')
+    path.write_text(json.dumps({'type': 'user', 'cwd': repo,
+                               'message': {'content': 'same title'}}) + '\n')
+    os.utime(path, (1700000000, 1700000000))
+PY
+      }
+
+      It 'keeps both listed rows distinguishable'
+      run_it() {
+        collision_sessions
+        builtin cd "$REPO"
+        resume -l -t claude > "$TMPROOT/collision-rows"
+        local -a listed
+        listed=("${(@f)$(cat "$TMPROOT/collision-rows")}")
+        (( ${#listed} == 2 )) && [[ "$listed[1]" != "$listed[2]" ]] && print distinct
+      }
+      When call run_it
+      The status should be success
+      The output should equal 'distinct'
+      End
+
+      It 'resumes the second session chosen through gum'
+      run_it() {
+        collision_sessions
+        builtin cd "$REPO"
+        RESUME_TEST_PICK_ROW=2 resume -t claude
+      }
+      When call run_it
+      The status should be success
+      The output should equal "claude --resume 11111111-1111-4111-8111-1111deadbeef cwd=$REPO"
+      The stderr should include 'resuming claude'
+      End
+
+      It 'resumes the second session chosen through the numbered fallback'
+      run_it() {
+        collision_sessions
+        builtin cd "$REPO"
+        rm "$TMPROOT/bin/gum"; hash -r
+        resume -t claude
+      }
+      Data "2"
+      When call run_it
+      The status should be success
+      The output should equal "claude --resume 11111111-1111-4111-8111-1111deadbeef cwd=$REPO"
+      The stderr should include 'session'
+      End
+    End
+
     It 'launches the picked CLI with its resume flag from the session directory'
     run_it() { builtin cd "$REPO"; RESUME_TEST_PICK='Claude custom title' resume; }
     When call run_it

@@ -137,19 +137,22 @@ resume() {
     return 1
   }
 
-  # One display line per row: tool, time, where, title, id tail. Lines and
-  # rows share indexes; the picked line is mapped back by exact match. The
+  # One display line per row: number, tool, time, where, title, id tail. The
+  # number keeps labels unique even when every visible field collides. Lines
+  # and rows share indexes; the picked line is mapped back by exact match. The
   # title takes whatever width the terminal has left so gum never wraps a row.
   local -a lines parts
-  local row when where title line
+  local row when where title line row_number=0 row_count=${#rows}
+  local number_width=${#row_count}
   # Fixed columns: tool 9, time 12, id 8, separators and gum's indicator ≈ 38.
   # The rest is split between the directory (at most 36) and the title.
-  local free=$(( ${COLUMNS:-120} - 38 ))
+  local free=$(( ${COLUMNS:-120} - 38 - number_width - 3 ))
   (( free < 40 )) && free=40
   local ww=$(( free * 2 / 5 ))
   (( ww > 36 )) && ww=36
   local tw=$(( free - ww - 2 ))
   for row in "${rows[@]}"; do
+    (( ++row_number ))
     parts=("${(@ps:\t:)row}")
     strftime -s when '%d %b %H:%M' "${parts[3]:-0}" 2>/dev/null || when='?'
     where=$parts[4]
@@ -161,7 +164,7 @@ resume() {
     # Keep the tail of a long path: the worktree name is the part that matters.
     (( ${#where} > ww )) && where="…${where[-$(( ww - 1 )),-1]}"
     title=${parts[5]:-(untitled)}
-    printf -v line "%-9s %s  %-${ww}s  %-${tw}.${tw}s  %s" "$parts[1]" "$when" "$where" "$title" "${parts[2][-8,-1]}"
+    printf -v line "[%${number_width}d] %-9s %s  %-${ww}s  %-${tw}.${tw}s  %s" "$row_number" "$parts[1]" "$when" "$where" "$title" "${parts[2][-8,-1]}"
     lines+=("$line")
   done
 
