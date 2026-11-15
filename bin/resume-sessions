@@ -397,9 +397,11 @@ def repo_root():
         warn("git rev-parse timed out while determining the checkout root")
         return None
     except OSError:
+        warn("could not run git while determining the checkout root")
         return None
     current = result.stdout.rstrip("\n") if result.returncode == 0 else ""
     if not current:
+        warn("not inside a git repository (use -a for all sessions)")
         return None
     paths = worktrees(current, warn_timeout=False)
     if paths:

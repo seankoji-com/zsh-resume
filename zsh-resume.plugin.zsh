@@ -102,7 +102,8 @@ resume() {
   if (( all )); then
     root=$(resume_root 2>/dev/null) || root=$PWD
   else
-    root=$(resume_root) && [[ -n "$root" ]] || {
+    root=$(resume_root) || return 1
+    [[ -n "$root" ]] || {
       _resume_log error "resume: could not determine repository root (use -a for all sessions)"
       return 1
     }

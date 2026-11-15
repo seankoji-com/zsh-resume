@@ -105,7 +105,6 @@ STUB
     When call run_it
     The status should be failure
     The stderr should include 'git rev-parse timed out'
-    The stderr should include 'could not determine repository root'
     End
 
     It 'includes current sessions in separate git directories, submodules and bare worktrees'
@@ -370,7 +369,7 @@ Describe 'resume (errors)'
     run_it() { builtin cd "$TMPROOT/other"; resume -l; }
     When call run_it
     The status should be failure
-    The stderr should include 'could not determine repository root'
+    The stderr should include 'not inside a git repository'
     End
 
     It 'reports when no session matches'
@@ -393,6 +392,7 @@ Describe 'resume (errors)'
     When call run_it
     The status should be failure
     The stderr should include 'python3 is required'
+    The stderr should not include 'could not determine repository root'
     End
 
     It 'prints usage with -h'
