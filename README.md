@@ -77,8 +77,10 @@ relaunched from the repo root.
 
 `resume_sessions` and `resume_root` are exposed for scripting: the first prints
 the raw rows as TSV (`tool  id  updated-epoch  cwd  title`, newest first, same
-flags as `bin/resume-sessions`), the second prints the main checkout of the
-current repo.
+flags as `bin/resume-sessions`), the second prints the main checkout when Git
+can identify it, or the current checkout if discovery fails or times out.
+With a separate Git directory, Git may not identify the main checkout from a
+linked worktree; sessions in the current and registered worktrees remain in scope.
 
 ## How sessions are found
 

@@ -83,9 +83,32 @@ STUB
     The output should include 'Claude custom title'
     The output should not include 'claude elsewhere'
     The stderr should include 'git worktree list timed out'
+    The lines of stderr should equal 1
     End
 
-    It 'preserves Git first-entry semantics for separate git directories and bare repositories'
+    It 'reports a stalled repository root lookup without claiming it is outside Git'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+case " $* " in *" rev-parse --show-toplevel "*) exec /bin/sleep 10 ;; esac
+exec /usr/bin/git "$@"
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      SECONDS=0
+      resume -l -t claude
+      local result=$?
+      (( SECONDS < 5 )) || return 0
+      return $result
+    }
+    When call run_it
+    The status should be failure
+    The stderr should include 'git rev-parse timed out'
+    The stderr should include 'could not determine repository root'
+    End
+
+    It 'includes current sessions in separate git directories, submodules and bare worktrees'
     run_it() {
       /usr/bin/git init -q --separate-git-dir "$TMPROOT/separate.git" "$TMPROOT/separate"
       /usr/bin/git -C "$TMPROOT/separate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
@@ -93,17 +116,26 @@ STUB
       /usr/bin/git init -q --bare "$TMPROOT/bare.git"
       /usr/bin/git -C "$TMPROOT/bare.git" fetch -q "$TMPROOT/separate" HEAD:refs/heads/initial
       /usr/bin/git -C "$TMPROOT/bare.git" worktree add -q "$TMPROOT/bare-wt" initial
+      /usr/bin/git -C "$REPO" -c protocol.file.allow=always submodule add -q "$TMPROOT/separate" sub
+      python3 - "$HOME" "$TMPROOT/separate" "$TMPROOT/separate-wt" "$TMPROOT/bare-wt" "$REPO/sub" <<'PY'
+import json, pathlib, sys
+project = pathlib.Path(sys.argv[1]) / '.claude/projects/layout'
+project.mkdir(parents=True)
+for i, path in enumerate(sys.argv[2:]):
+    (project / f'layout-{i}.jsonl').write_text(json.dumps({'type': 'user', 'cwd': path, 'message': {'content': f'layout session {i}'}}) + '\n')
+PY
+      builtin cd "$TMPROOT/separate"
+      resume -l -t claude | grep -F 'layout session 0' || return 1
       builtin cd "$TMPROOT/separate-wt"
-      local actual=$(resume_root)
-      [[ "$actual" == "$TMPROOT/separate.git" ]] || { print -u2 "separate: $actual"; return 1; }
+      resume -l -t claude | grep -F 'layout session 1' || return 1
       builtin cd "$TMPROOT/bare-wt"
-      actual=$(resume_root)
-      [[ "$actual" == "$TMPROOT/bare.git" ]] || { print -u2 "bare: $actual"; return 1; }
-      print verified
+      resume -l -t claude | grep -F 'layout session 2' || return 1
+      builtin cd "$REPO/sub"
+      resume -l -t claude | grep -F 'layout session 3' || return 1
     }
     When call run_it
     The status should be success
-    The output should equal 'verified'
+    The lines of output should equal 4
     End
 
     It 'lists this repo root and worktree sessions from every tool, newest first'
@@ -338,7 +370,7 @@ Describe 'resume (errors)'
     run_it() { builtin cd "$TMPROOT/other"; resume -l; }
     When call run_it
     The status should be failure
-    The stderr should include 'not inside a git repository'
+    The stderr should include 'could not determine repository root'
     End
 
     It 'reports when no session matches'

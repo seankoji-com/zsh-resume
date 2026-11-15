@@ -53,14 +53,13 @@ _resume_log() {
   fi
 }
 
-# Print Git's first worktree path, falling back to the current checkout if
-# worktree listing fails or times out.
+# Print the main checkout when available, or the current checkout as fallback.
 resume_root() {
   resume_sessions --repo-root
 }
 
 # Print sessions as TSV (tool, id, updated-epoch, cwd, title), newest first.
-# Args are passed straight to bin/resume-sessions (--root DIR | --all, --tools, --limit).
+# Args are passed straight to bin/resume-sessions (--root DIR | --all | --repo-root, --tools, --limit).
 resume_sessions() {
   (( $+commands[python3] )) || {
     _resume_log error "resume: python3 is required for session discovery"
@@ -104,7 +103,7 @@ resume() {
     root=$(resume_root 2>/dev/null) || root=$PWD
   else
     root=$(resume_root) && [[ -n "$root" ]] || {
-      _resume_log error "resume: not inside a git repository (use -a for all sessions)"
+      _resume_log error "resume: could not determine repository root (use -a for all sessions)"
       return 1
     }
   fi

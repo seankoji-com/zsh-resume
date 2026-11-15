@@ -18,6 +18,7 @@ only, after sorting.
 Usage:
   resume-sessions --root DIR [--tools a,b] [--limit N]
   resume-sessions --all      [--tools a,b] [--limit N]
+  resume-sessions --repo-root
 """
 import argparse
 import glob
@@ -363,7 +364,7 @@ def norm(path):
         return path
 
 
-def worktrees(root):
+def worktrees(root, warn_timeout=True):
     """Registered worktrees in Git's order, or an empty list on failure."""
     try:
         result = subprocess.run(
@@ -373,7 +374,8 @@ def worktrees(root):
         if result.returncode == 0:
             return [line[9:] for line in result.stdout.splitlines() if line.startswith("worktree ")]
     except subprocess.TimeoutExpired:
-        warn("git worktree list timed out; using the supplied root only")
+        if warn_timeout:
+            warn("git worktree list timed out; using the supplied root only")
     except OSError:
         pass
     return []
@@ -385,19 +387,33 @@ def repo_dirs(root):
 
 
 def repo_root():
-    """Find Git's first worktree, falling back to the current checkout's root."""
+    """Find the main checkout where Git can identify it, else the current one."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True,
             text=True, check=False, timeout=GIT_WORKTREE_TIMEOUT,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        warn("git rev-parse timed out while determining the checkout root")
+        return None
+    except OSError:
         return None
     current = result.stdout.rstrip("\n") if result.returncode == 0 else ""
     if not current:
         return None
-    paths = worktrees(current)
-    return paths[0] if paths else current
+    paths = worktrees(current, warn_timeout=False)
+    if paths:
+        try:
+            first = subprocess.run(
+                ["git", "-C", paths[0], "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=False, timeout=GIT_WORKTREE_TIMEOUT,
+            )
+            resolved = first.stdout.rstrip("\n") if first.returncode == 0 else ""
+            if resolved:
+                return resolved
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return current
 
 
 def scope(dirs):
@@ -418,7 +434,7 @@ def main(argv=None):
     where = ap.add_mutually_exclusive_group(required=True)
     where.add_argument("--root", help="repo root; keep sessions under it or under any of its worktrees")
     where.add_argument("--all", action="store_true", help="every session on this machine")
-    where.add_argument("--repo-root", action="store_true", help="print Git's first worktree path")
+    where.add_argument("--repo-root", action="store_true", help="print the checkout root used by resume")
     ap.add_argument("--tools", default=",".join(TOOLS), help="comma-separated subset of: " + " ".join(TOOLS))
     ap.add_argument("--limit", type=int, default=0, help="print at most N rows (0 = all)")
     args = ap.parse_args(argv)
