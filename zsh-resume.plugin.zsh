@@ -53,17 +53,10 @@ _resume_log() {
   fi
 }
 
-# Print the main checkout of the current repository: the first entry of
-# `git worktree list`, which is the same answer from the root and from any
-# worktree.
+# Print Git's first worktree path, falling back to the current checkout if
+# worktree listing fails or times out.
 resume_root() {
-  command git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  local line
-  command git worktree list --porcelain 2>/dev/null | while IFS= read -r line; do
-    [[ "$line" == "worktree "* ]] || continue
-    print -r -- "${line#worktree }"
-    return 0
-  done
+  resume_sessions --repo-root
 }
 
 # Print sessions as TSV (tool, id, updated-epoch, cwd, title), newest first.
@@ -110,7 +103,7 @@ resume() {
   if (( all )); then
     root=$(resume_root 2>/dev/null) || root=$PWD
   else
-    root=$(resume_root) || {
+    root=$(resume_root) && [[ -n "$root" ]] || {
       _resume_log error "resume: not inside a git repository (use -a for all sessions)"
       return 1
     }

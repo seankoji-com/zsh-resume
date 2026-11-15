@@ -20,7 +20,7 @@ LOADER.exec_module(COLLECTOR)
 class WorktreeTimeoutTest(unittest.TestCase):
     def test_stalled_git_returns_root_and_keeps_its_sessions(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td) / 'repo'
+            root = Path(td).resolve() / 'repo'
             root.mkdir()
             git = Path(td) / 'git'
             git.write_text('#!/bin/sh\nexec /bin/sleep 3\n')
@@ -40,7 +40,7 @@ class WorktreeTimeoutTest(unittest.TestCase):
 
     def test_success_includes_registered_worktree(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td) / 'repo'
+            root = Path(td).resolve() / 'repo'
             root.mkdir()
             git = Path(td) / 'git'
             git.write_text('#!/bin/sh\nprintf "worktree %s\\nworktree %s\\n" "$2" "$2-sibling"\n')

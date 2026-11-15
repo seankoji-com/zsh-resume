@@ -27,6 +27,12 @@ cleanup() {
 BeforeEach 'setup'
 AfterEach 'cleanup'
 
+    It 'bounds stalled worktree discovery and keeps the root'
+    When run python3 "$SHELLSPEC_PROJECT_ROOT/spec/worktree_timeout_test.py"
+    The status should be success
+    The stderr should include 'OK'
+    End
+
     It 'keeps later sessions when an earlier file disappears before stat'
     When run python3 "$SHELLSPEC_PROJECT_ROOT/spec/mtime_race_test.py"
     The status should be success

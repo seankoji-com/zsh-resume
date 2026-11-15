@@ -60,15 +60,52 @@ cleanup() {
 BeforeEach 'setup'
 AfterEach 'cleanup'
 
-Describe 'worktree discovery timeout'
-    It 'falls back to the root and preserves normal discovery'
-    When run python3 "$SHELLSPEC_PROJECT_ROOT/spec/worktree_timeout_test.py"
-    The status should be success
-    The stderr should include 'OK'
-    End
-End
-
 Describe 'resume -l'
+    It 'returns root sessions when worktree listing stalls'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+case " $* " in *" worktree list "*) exec /bin/sleep 10 ;; esac
+exec /usr/bin/git "$@"
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      SECONDS=0
+      local all_rows
+      all_rows=$(resume -l -a -t claude) || return 1
+      [[ "$all_rows" == *'claude elsewhere'* ]] || return 1
+      resume -l -t claude || return 1
+      (( SECONDS < 9 )) || return 1
+    }
+    When call run_it
+    The status should be success
+    The output should include 'Claude custom title'
+    The output should not include 'claude elsewhere'
+    The stderr should include 'git worktree list timed out'
+    End
+
+    It 'preserves Git first-entry semantics for separate git directories and bare repositories'
+    run_it() {
+      /usr/bin/git init -q --separate-git-dir "$TMPROOT/separate.git" "$TMPROOT/separate"
+      /usr/bin/git -C "$TMPROOT/separate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+      /usr/bin/git -C "$TMPROOT/separate" worktree add -q "$TMPROOT/separate-wt" -b separate-wt
+      /usr/bin/git init -q --bare "$TMPROOT/bare.git"
+      /usr/bin/git -C "$TMPROOT/bare.git" fetch -q "$TMPROOT/separate" HEAD:refs/heads/initial
+      /usr/bin/git -C "$TMPROOT/bare.git" worktree add -q "$TMPROOT/bare-wt" initial
+      builtin cd "$TMPROOT/separate-wt"
+      local actual=$(resume_root)
+      [[ "$actual" == "$TMPROOT/separate.git" ]] || { print -u2 "separate: $actual"; return 1; }
+      builtin cd "$TMPROOT/bare-wt"
+      actual=$(resume_root)
+      [[ "$actual" == "$TMPROOT/bare.git" ]] || { print -u2 "bare: $actual"; return 1; }
+      print verified
+    }
+    When call run_it
+    The status should be success
+    The output should equal 'verified'
+    End
+
     It 'lists this repo root and worktree sessions from every tool, newest first'
     run_it() { builtin cd "$REPO"; resume -l; }
     When call run_it

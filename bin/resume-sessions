@@ -363,22 +363,41 @@ def norm(path):
         return path
 
 
-def repo_dirs(root):
-    """The root plus every registered worktree, realpath'd."""
-    dirs = {norm(root)}
+def worktrees(root):
+    """Registered worktrees in Git's order, or an empty list on failure."""
     try:
-        out = subprocess.run(
+        result = subprocess.run(
             ["git", "-C", root, "worktree", "list", "--porcelain"],
             capture_output=True, text=True, check=False, timeout=GIT_WORKTREE_TIMEOUT,
-        ).stdout
-        for line in out.splitlines():
-            if line.startswith("worktree "):
-                dirs.add(norm(line[9:]))
+        )
+        if result.returncode == 0:
+            return [line[9:] for line in result.stdout.splitlines() if line.startswith("worktree ")]
     except subprocess.TimeoutExpired:
         warn("git worktree list timed out; using the supplied root only")
     except OSError:
         pass
-    return dirs
+    return []
+
+
+def repo_dirs(root):
+    """The root plus every registered worktree, realpath'd."""
+    return {norm(root), *(norm(path) for path in worktrees(root))}
+
+
+def repo_root():
+    """Find Git's first worktree, falling back to the current checkout's root."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True,
+            text=True, check=False, timeout=GIT_WORKTREE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    current = result.stdout.rstrip("\n") if result.returncode == 0 else ""
+    if not current:
+        return None
+    paths = worktrees(current)
+    return paths[0] if paths else current
 
 
 def scope(dirs):
@@ -399,9 +418,17 @@ def main(argv=None):
     where = ap.add_mutually_exclusive_group(required=True)
     where.add_argument("--root", help="repo root; keep sessions under it or under any of its worktrees")
     where.add_argument("--all", action="store_true", help="every session on this machine")
+    where.add_argument("--repo-root", action="store_true", help="print Git's first worktree path")
     ap.add_argument("--tools", default=",".join(TOOLS), help="comma-separated subset of: " + " ".join(TOOLS))
     ap.add_argument("--limit", type=int, default=0, help="print at most N rows (0 = all)")
     args = ap.parse_args(argv)
+
+    if args.repo_root:
+        root = repo_root()
+        if not root:
+            return 1
+        print(root)
+        return 0
 
     tools = [t for t in args.tools.split(",") if t]
     unknown = [t for t in tools if t not in READERS]
