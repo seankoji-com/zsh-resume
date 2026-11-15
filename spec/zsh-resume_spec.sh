@@ -61,6 +61,33 @@ BeforeEach 'setup'
 AfterEach 'cleanup'
 
 Describe 'resume -l'
+    It 'lists worktree sessions from a bare container and from inside a git directory'
+    run_it() {
+      mkdir "$TMPROOT/container"
+      /usr/bin/git init -q --bare "$TMPROOT/container/.bare"
+      print 'gitdir: .bare' > "$TMPROOT/container/.git"
+      /usr/bin/git -C "$TMPROOT/container/.bare" fetch -q "$REPO" HEAD:refs/heads/main
+      /usr/bin/git -C "$TMPROOT/container/.bare" worktree add -q "$TMPROOT/container/main" main
+      /usr/bin/git -C "$TMPROOT/container/.bare" worktree add -q -b feature "$TMPROOT/container/feature" main
+      python3 - "$HOME" "$TMPROOT/container/main" "$TMPROOT/container/feature" <<'PY'
+import json, pathlib, sys
+project = pathlib.Path(sys.argv[1]) / '.claude/projects/bare-container'
+project.mkdir(parents=True)
+for i, path in enumerate(sys.argv[2:]):
+    (project / f'container-{i}.jsonl').write_text(json.dumps({'type': 'user', 'cwd': path, 'message': {'content': f'container session {i}'}}) + '\n')
+PY
+      builtin cd "$TMPROOT/container"
+      local rows
+      rows=$(resume -l -t claude) || return 1
+      [[ "$rows" == *'container session 0'* && "$rows" == *'container session 1'* ]] || return 1
+      builtin cd "$REPO/.git"
+      resume -l -t claude
+    }
+    When call run_it
+    The status should be success
+    The output should include 'Claude custom title'
+    End
+
     It 'returns root sessions when worktree listing stalls'
     run_it() {
       cat > "$TMPROOT/bin/git" <<'STUB'
@@ -369,7 +396,26 @@ Describe 'resume (errors)'
     run_it() { builtin cd "$TMPROOT/other"; resume -l; }
     When call run_it
     The status should be failure
-    The stderr should include 'not inside a git repository'
+    The stderr should include 'could not determine repository root'
+    End
+
+    It 'reports a Git failure without exposing its stderr'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+printf '%s\n' 'private diagnostic marker' >&2
+exit 128
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      resume -l -t claude
+    }
+    When call run_it
+    The status should be failure
+    The stderr should include 'could not determine repository root'
+    The stderr should not include 'not inside a git repository'
+    The stderr should not include 'private diagnostic marker'
     End
 
     It 'reports when no session matches'

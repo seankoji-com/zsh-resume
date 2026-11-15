@@ -401,7 +401,13 @@ def repo_root():
         return None
     current = result.stdout.rstrip("\n") if result.returncode == 0 else ""
     if not current:
-        warn("not inside a git repository (use -a for all sessions)")
+        # Bare repository containers and Git directories have no working tree,
+        # but Git can still enumerate their registered worktrees.
+        paths = worktrees(".")
+        if paths:
+            return paths[0]
+        # Do not forward Git's stderr: it may contain sensitive paths or data.
+        warn("could not determine repository root; check Git access or use -a for all sessions")
         return None
     paths = worktrees(current, warn_timeout=False)
     if paths:
