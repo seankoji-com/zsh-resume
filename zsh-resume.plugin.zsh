@@ -14,7 +14,7 @@
 # Configure before loading:
 #   RESUME_TOOLS   space-separated tools to look at
 #                  (default: claude agy codex opencode opencode2 grok kiro-cli)
-#   RESUME_LIMIT   newest N store files inspected per tool (default 200)
+#   RESUME_LIMIT   maximum output rows after sorting (default 500; 0 = all)
 #   RESUME_CMDS    assoc array tool -> resume command prefix; the session id
 #                  is appended. Override an entry to change how a tool resumes.
 #   RESUME_STRICT_CWD
@@ -53,21 +53,13 @@ _resume_log() {
   fi
 }
 
-# Print the main checkout of the current repository: the first entry of
-# `git worktree list`, which is the same answer from the root and from any
-# worktree.
+# Print the main checkout when available, or the current checkout as fallback.
 resume_root() {
-  command git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  local line
-  command git worktree list --porcelain 2>/dev/null | while IFS= read -r line; do
-    [[ "$line" == "worktree "* ]] || continue
-    print -r -- "${line#worktree }"
-    return 0
-  done
+  resume_sessions --repo-root
 }
 
 # Print sessions as TSV (tool, id, updated-epoch, cwd, title), newest first.
-# Args are passed straight to bin/resume-sessions (--root DIR | --all, --tools, --limit).
+# Args are passed straight to bin/resume-sessions (--root DIR | --all | --repo-root, --tools, --limit).
 resume_sessions() {
   (( $+commands[python3] )) || {
     _resume_log error "resume: python3 is required for session discovery"
@@ -110,8 +102,9 @@ resume() {
   if (( all )); then
     root=$(resume_root 2>/dev/null) || root=$PWD
   else
-    root=$(resume_root) || {
-      _resume_log error "resume: not inside a git repository (use -a for all sessions)"
+    root=$(resume_root) || return 1
+    [[ -n "$root" ]] || {
+      _resume_log error "resume: could not determine repository root (use -a for all sessions)"
       return 1
     }
   fi

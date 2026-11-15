@@ -61,6 +61,109 @@ BeforeEach 'setup'
 AfterEach 'cleanup'
 
 Describe 'resume -l'
+    It 'lists worktree sessions from a bare container and from inside a git directory'
+    run_it() {
+      mkdir "$TMPROOT/container"
+      /usr/bin/git init -q --bare "$TMPROOT/container/.bare"
+      print 'gitdir: .bare' > "$TMPROOT/container/.git"
+      /usr/bin/git -C "$TMPROOT/container/.bare" fetch -q "$REPO" HEAD:refs/heads/main
+      /usr/bin/git -C "$TMPROOT/container/.bare" worktree add -q "$TMPROOT/container/main" main
+      /usr/bin/git -C "$TMPROOT/container/.bare" worktree add -q -b feature "$TMPROOT/container/feature" main
+      python3 - "$HOME" "$TMPROOT/container/main" "$TMPROOT/container/feature" <<'PY'
+import json, pathlib, sys
+project = pathlib.Path(sys.argv[1]) / '.claude/projects/bare-container'
+project.mkdir(parents=True)
+for i, path in enumerate(sys.argv[2:]):
+    (project / f'container-{i}.jsonl').write_text(json.dumps({'type': 'user', 'cwd': path, 'message': {'content': f'container session {i}'}}) + '\n')
+PY
+      builtin cd "$TMPROOT/container"
+      local rows
+      rows=$(resume -l -t claude) || return 1
+      [[ "$rows" == *'container session 0'* && "$rows" == *'container session 1'* ]] || return 1
+      builtin cd "$REPO/.git"
+      resume -l -t claude
+    }
+    When call run_it
+    The status should be success
+    The output should include 'Claude custom title'
+    End
+
+    It 'returns root sessions when worktree listing stalls'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+case " $* " in *" worktree list "*) exec /bin/sleep 10 ;; esac
+exec /usr/bin/git "$@"
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      SECONDS=0
+      local all_rows
+      all_rows=$(resume -l -a -t claude) || return 1
+      [[ "$all_rows" == *'claude elsewhere'* ]] || return 1
+      resume -l -t claude || return 1
+      (( SECONDS < 9 )) || return 1
+    }
+    When call run_it
+    The status should be success
+    The output should include 'Claude custom title'
+    The output should not include 'claude elsewhere'
+    The stderr should include 'git worktree list timed out'
+    The lines of stderr should equal 1
+    End
+
+    It 'reports a stalled repository root lookup without claiming it is outside Git'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+case " $* " in *" rev-parse --show-toplevel "*) exec /bin/sleep 10 ;; esac
+exec /usr/bin/git "$@"
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      SECONDS=0
+      resume -l -t claude
+      local result=$?
+      (( SECONDS < 5 )) || return 0
+      return $result
+    }
+    When call run_it
+    The status should be failure
+    The stderr should include 'git rev-parse timed out'
+    End
+
+    It 'includes current sessions in separate git directories, submodules and bare worktrees'
+    run_it() {
+      /usr/bin/git init -q --separate-git-dir "$TMPROOT/separate.git" "$TMPROOT/separate"
+      /usr/bin/git -C "$TMPROOT/separate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+      /usr/bin/git -C "$TMPROOT/separate" worktree add -q "$TMPROOT/separate-wt" -b separate-wt
+      /usr/bin/git init -q --bare "$TMPROOT/bare.git"
+      /usr/bin/git -C "$TMPROOT/bare.git" fetch -q "$TMPROOT/separate" HEAD:refs/heads/initial
+      /usr/bin/git -C "$TMPROOT/bare.git" worktree add -q "$TMPROOT/bare-wt" initial
+      /usr/bin/git -C "$REPO" -c protocol.file.allow=always submodule add -q "$TMPROOT/separate" sub
+      python3 - "$HOME" "$TMPROOT/separate" "$TMPROOT/separate-wt" "$TMPROOT/bare-wt" "$REPO/sub" <<'PY'
+import json, pathlib, sys
+project = pathlib.Path(sys.argv[1]) / '.claude/projects/layout'
+project.mkdir(parents=True)
+for i, path in enumerate(sys.argv[2:]):
+    (project / f'layout-{i}.jsonl').write_text(json.dumps({'type': 'user', 'cwd': path, 'message': {'content': f'layout session {i}'}}) + '\n')
+PY
+      builtin cd "$TMPROOT/separate"
+      resume -l -t claude | grep -F 'layout session 0' || return 1
+      builtin cd "$TMPROOT/separate-wt"
+      resume -l -t claude | grep -F 'layout session 1' || return 1
+      builtin cd "$TMPROOT/bare-wt"
+      resume -l -t claude | grep -F 'layout session 2' || return 1
+      builtin cd "$REPO/sub"
+      resume -l -t claude | grep -F 'layout session 3' || return 1
+    }
+    When call run_it
+    The status should be success
+    The lines of output should equal 4
+    End
+
     It 'lists this repo root and worktree sessions from every tool, newest first'
     run_it() { builtin cd "$REPO"; resume -l; }
     When call run_it
@@ -293,7 +396,26 @@ Describe 'resume (errors)'
     run_it() { builtin cd "$TMPROOT/other"; resume -l; }
     When call run_it
     The status should be failure
-    The stderr should include 'not inside a git repository'
+    The stderr should include 'could not determine repository root'
+    End
+
+    It 'reports a Git failure without exposing its stderr'
+    run_it() {
+      cat > "$TMPROOT/bin/git" <<'STUB'
+#!/bin/sh
+printf '%s\n' 'private diagnostic marker' >&2
+exit 128
+STUB
+      chmod +x "$TMPROOT/bin/git"
+      hash -r
+      builtin cd "$REPO"
+      resume -l -t claude
+    }
+    When call run_it
+    The status should be failure
+    The stderr should include 'could not determine repository root'
+    The stderr should not include 'not inside a git repository'
+    The stderr should not include 'private diagnostic marker'
     End
 
     It 'reports when no session matches'
@@ -316,6 +438,7 @@ Describe 'resume (errors)'
     When call run_it
     The status should be failure
     The stderr should include 'python3 is required'
+    The stderr should not include 'could not determine repository root'
     End
 
     It 'prints usage with -h'
