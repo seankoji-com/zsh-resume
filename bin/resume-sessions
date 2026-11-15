@@ -34,6 +34,7 @@ TOOLS = ["claude", "agy", "codex", "opencode", "opencode2", "grok", "kiro-cli"]
 WINDOW = 256 * 1024       # bytes read from the head and the tail of a large claude transcript
 CODEX_SCAN = 64 * 1024    # bytes scanned forward in a codex rollout for a first prompt
 TITLE_MAX = 200
+GIT_WORKTREE_TIMEOUT = 2  # seconds
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
@@ -368,11 +369,13 @@ def repo_dirs(root):
     try:
         out = subprocess.run(
             ["git", "-C", root, "worktree", "list", "--porcelain"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, timeout=GIT_WORKTREE_TIMEOUT,
         ).stdout
         for line in out.splitlines():
             if line.startswith("worktree "):
                 dirs.add(norm(line[9:]))
+    except subprocess.TimeoutExpired:
+        warn("git worktree list timed out; using the supplied root only")
     except OSError:
         pass
     return dirs

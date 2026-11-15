@@ -14,7 +14,7 @@
 # Configure before loading:
 #   RESUME_TOOLS   space-separated tools to look at
 #                  (default: claude agy codex opencode opencode2 grok kiro-cli)
-#   RESUME_LIMIT   newest N store files inspected per tool (default 200)
+#   RESUME_LIMIT   maximum output rows after sorting (default 500; 0 = all)
 #   RESUME_CMDS    assoc array tool -> resume command prefix; the session id
 #                  is appended. Override an entry to change how a tool resumes.
 #   RESUME_STRICT_CWD

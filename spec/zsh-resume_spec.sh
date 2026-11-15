@@ -60,6 +60,14 @@ cleanup() {
 BeforeEach 'setup'
 AfterEach 'cleanup'
 
+Describe 'worktree discovery timeout'
+    It 'falls back to the root and preserves normal discovery'
+    When run python3 "$SHELLSPEC_PROJECT_ROOT/spec/worktree_timeout_test.py"
+    The status should be success
+    The stderr should include 'OK'
+    End
+End
+
 Describe 'resume -l'
     It 'lists this repo root and worktree sessions from every tool, newest first'
     run_it() { builtin cd "$REPO"; resume -l; }
